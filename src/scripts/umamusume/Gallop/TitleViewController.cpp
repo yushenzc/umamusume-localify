@@ -1,6 +1,13 @@
 #include "../../ScriptInternal.hpp"
 #include "TitleViewController.hpp"
+#include "DialogCommon.hpp"
+#include "DialogManager.hpp"
+#include "Screen.hpp"
+#include "UIManager.hpp"
 #include "../../Cute.Cri.Assembly/Cute/Cri/AudioPlayback.hpp"
+#include "../../UnityEngine.CoreModule/UnityEngine/RectTransform.hpp"
+#include "../../Plugins/CodeStage/AntiCheat/ObscuredTypes/ObscuredInt.hpp"
+#include "../../Plugins/CodeStage/AntiCheat/ObscuredTypes/ObscuredLong.hpp"
 
 #include "game.hpp"
 #include "settings_text.hpp"
@@ -15,43 +22,192 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 
-#include <rapidjson/rapidjson.h>
+#include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
 
 #include "stdinclude.hpp"
 
 #include "taskbar/TaskbarManager.hpp"
 
+#include "string_utils.hpp"
+
 using namespace Microsoft::WRL;
 using namespace Microsoft::WRL::Wrappers;
 
-void* TitleViewController_OnClickPushStart_addr = nullptr;
-void* TitleViewController_OnClickPushStart_orig = nullptr;
-
-void* TitleViewController_UpdateView_addr = nullptr;
-void* TitleViewController_UpdateView_orig = nullptr;
-
 namespace
 {
+	void* TitleViewController_OnClickPushStart_addr = nullptr;
+	void* TitleViewController_OnClickPushStart_orig = nullptr;
+
+	void* TitleViewController_UpdateView_addr = nullptr;
+	void* TitleViewController_UpdateView_orig = nullptr;
+
+	void* TitleViewController_InitializeView_addr = nullptr;
+	void* TitleViewController_InitializeView_orig = nullptr;
+
 	wil::com_ptr<ICoreWebView2Controller> webviewController;
 	wil::com_ptr<ICoreWebView2> webview;
+
+	bool isLoginWebViewOpen = false;
+
+	constexpr auto DMM_UA = L"DMMGamePlayer5-Win/5.4.17";
+	constexpr auto DMM_API = L"apidgp-gameplayer.games.dmm.com";
+	constexpr auto BASE_HEADER = L"Client-App: DMMGamePlayer5\nClient-version: 5.4.17";
+	const wchar_t* ACCEPT_TYPE[] = {L"application/json", nullptr};
 }
 
-bool isLoginWebViewOpen = false;
-
-static string GetGameArgs(wstring sessionId, wstring secureId)
+static void PrintParseError(rapidjson::Document& document)
 {
-	auto hInternet = InternetOpenW(L"DMMGamePlayer5/5.3.22", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+	cout << "Response JSON parse error: " << GetParseError_En(document.GetParseError()) << " (" << document.GetErrorOffset() << ")" << endl;
+}
 
-	auto hConnect = InternetConnectW(hInternet, L"apidgp-gameplayer.games.dmm.com", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, NULL);
+static void ShowErrorDialog(string error)
+{
+	auto t = il2cpp_thread_attach(il2cpp_domain_get());
 
-	LPCWSTR types[] = { L"application/json", NULL };
-	auto hReq = HttpOpenRequestW(hConnect, L"POST", L"/v5/launch/cl", nullptr, nullptr, types, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_COOKIES, NULL);
+	auto dialogData = Gallop::DialogCommon::Data();
+	dialogData.SetSimpleOneButtonMessage(GetTextIdByName(L"Error0014"), il2cpp_string_new(error.data()), nullptr, GetTextIdByName(L"Common0007"));
+
+	Gallop::DialogManager::PushDialog(dialogData);
+
+	il2cpp_thread_detach(t);
+}
+
+static string GetLoginUrl()
+{
+	auto hInternet = InternetOpenW(DMM_UA, INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+
+	auto hConnect = InternetConnectW(hInternet, DMM_API, INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, NULL);
+
+	auto hReq = HttpOpenRequestW(hConnect, L"POST", L"/v5/auth/login/url", nullptr, nullptr, ACCEPT_TYPE, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_COOKIES, NULL);
+
+	auto body = R"({"prompt":""})"s;
+	auto res = HttpSendRequestW(hReq, BASE_HEADER, 0, body.data(), body.size());
+
+	if (!res)
+	{
+		return "";
+	}
+
+	DWORD dwSize = 0;
+	DWORD dwSizeLen = sizeof(DWORD);
+
+	HttpQueryInfoW(hReq, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &dwSize, &dwSizeLen, 0);
+
+	char* buffer = new char[dwSize + 1];
+
+	DWORD dwBytesRead;
+	BOOL bRead = InternetReadFile(hReq, buffer, dwSize + 1, &dwBytesRead);
+
+	if (!bRead)
+	{
+		return "";
+	}
+	else
+	{
+		buffer[dwBytesRead] = 0;
+	}
+
+	InternetCloseHandle(hReq);
+	InternetCloseHandle(hConnect);
+	InternetCloseHandle(hInternet);
+
+	rapidjson::Document document;
+
+	document.Parse(buffer);
+	delete[] buffer;
+
+	if (document.HasParseError())
+	{
+		PrintParseError(document);
+		return "";
+	}
+
+	if (document.HasMember("result_code") && document["result_code"].GetInt() == 100)
+	{
+		return string(document["data"].GetObjectW()["url"].GetString());
+	}
+	else if (document.HasMember("error") && document["error"].IsString())
+	{
+		ShowErrorDialog(document["error"].GetString());
+	}
+
+	return "";
+}
+
+static string GetAccessToken(wstring code)
+{
+	auto hInternet = InternetOpenW(DMM_UA, INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+
+	auto hConnect = InternetConnectW(hInternet, DMM_API, INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, NULL);
+
+	auto hReq = HttpOpenRequestW(hConnect, L"POST", L"/v5/auth/accesstoken/issue", nullptr, nullptr, ACCEPT_TYPE, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_COOKIES, NULL);
+
+	auto body = R"({"code":")"s + wide_u8(code) + R"("})"s;
+	auto res = HttpSendRequestW(hReq, BASE_HEADER, 0, body.data(), body.size());
+
+	if (!res)
+	{
+		return "";
+	}
+
+	DWORD dwSize = 0;
+	DWORD dwSizeLen = sizeof(DWORD);
+
+	HttpQueryInfoW(hReq, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &dwSize, &dwSizeLen, 0);
+
+	char* buffer = new char[dwSize + 1];
+
+	DWORD dwBytesRead;
+	BOOL bRead = InternetReadFile(hReq, buffer, dwSize + 1, &dwBytesRead);
+
+	if (!bRead)
+	{
+		return "";
+	}
+	else
+	{
+		buffer[dwBytesRead] = 0;
+	}
+
+	InternetCloseHandle(hReq);
+	InternetCloseHandle(hConnect);
+	InternetCloseHandle(hInternet);
+
+	rapidjson::Document document;
+
+	document.Parse(buffer);
+	delete[] buffer;
+
+	if (document.HasParseError())
+	{
+		PrintParseError(document);
+		return "";
+	}
+
+	if (document.HasMember("result_code") && document["result_code"].GetInt() == 100)
+	{
+		return string(document["data"].GetObjectW()["access_token"].GetString());
+	}
+	else if (document.HasMember("error") && document["error"].IsString())
+	{
+		ShowErrorDialog(document["error"].GetString());
+	}
+
+	return "";
+}
+
+static string GetGameArgs(wstring actAuth)
+{
+	auto hInternet = InternetOpenW(DMM_UA, INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+
+	auto hConnect = InternetConnectW(hInternet, DMM_API, INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, NULL);
+
+	auto hReq = HttpOpenRequestW(hConnect, L"POST", L"/v5/r2/launch/cl", nullptr, nullptr, ACCEPT_TYPE, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_COOKIES, NULL);
 
 	wstringstream headerStream;
-	headerStream << L"Client-App: DMMGamePlayer5" << endl
-		<< L"Client-version: 5.3.22" << endl
-		<< L"Cookie: login_session_id=" << sessionId << L";login_secure_id=" << secureId << endl;
+	headerStream << BASE_HEADER << endl
+		<< L"ActAuth: " << actAuth << endl;
 
 	auto body = R"({"product_id":"umamusume","game_type":"GCL","launch_type":"LIB","game_os":"win","user_os":"win","mac_address":"null","hdd_serial":"null","motherboard":"null"})"s;
 	auto res = HttpSendRequestW(hReq, headerStream.str().data(), 0, body.data(), body.size());
@@ -91,7 +247,7 @@ static string GetGameArgs(wstring sessionId, wstring secureId)
 
 	if (document.HasParseError())
 	{
-		cout << "Response JSON parse error: " << GetParseError_En(document.GetParseError()) << " (" << document.GetErrorOffset() << ")" << endl;
+		PrintParseError(document);
 		return "";
 	}
 
@@ -101,35 +257,13 @@ static string GetGameArgs(wstring sessionId, wstring secureId)
 	}
 	else if (document.HasMember("error") && document["error"].IsString())
 	{
-		thread([](const char* error)
-			{
-				auto t = il2cpp_thread_attach(il2cpp_domain_get());
-
-				auto dialogData = il2cpp_object_new(
-					il2cpp_symbols::get_class("umamusume.dll", "Gallop", "DialogCommon/Data"));
-				il2cpp_runtime_object_init(dialogData);
-
-				dialogData = reinterpret_cast<Il2CppObject * (*)(Il2CppObject * thisObj,
-					ULONG headerTextId,
-					Il2CppString * message,
-					Il2CppDelegate * onClose,
-					ULONG closeTextId)>(
-						il2cpp_class_get_method_from_name(dialogData->klass, "SetSimpleOneButtonMessage",
-							4)->methodPointer
-						)(dialogData, GetTextIdByName(L"Error0014"), il2cpp_string_new(error), nullptr, GetTextIdByName(L"Common0007"));
-
-				il2cpp_symbols::get_method_pointer<Il2CppObject* (*)(Il2CppObject* data)>("umamusume.dll", "Gallop", "DialogManager", "PushDialog", 1)(dialogData);
-
-				il2cpp_thread_detach(t);
-			},
-			document["error"].GetString()
-		).detach();
+		ShowErrorDialog(document["error"].GetString());
 	}
 
 	return "";
 }
 
-LRESULT CALLBACK WebViewWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+static LRESULT CALLBACK WebViewWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -152,8 +286,15 @@ LRESULT CALLBACK WebViewWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
 	return NULL;
 }
 
-DWORD WINAPI WebViewThread(LPVOID)
+static DWORD WINAPI WebViewThread(LPVOID)
 {
+	wstring loginUrl = u8_wide(GetLoginUrl());
+
+	if (loginUrl.empty())
+	{
+		return 0;
+	}
+
 	IsGUIThread(TRUE);
 
 	WNDCLASSEX wcex = {};
@@ -163,8 +304,8 @@ DWORD WINAPI WebViewThread(LPVOID)
 	wcex.lpfnWndProc = WebViewWndProc;
 	wcex.cbClsExtra = 0;
 	wcex.cbWndExtra = 0;
-	wcex.hInstance = hInstance;
-	wcex.hIcon = LoadIconW(hInstance, reinterpret_cast<LPWSTR>(IDI_APP_ICON));
+	wcex.hInstance = GetModuleHandleW(nullptr);
+	wcex.hIcon = LoadIconW(wcex.hInstance, reinterpret_cast<LPWSTR>(IDI_APP_ICON));
 	wcex.hCursor = LoadCursorW(NULL, IDC_ARROW);
 	wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 	wcex.lpszMenuName = NULL;
@@ -179,7 +320,7 @@ DWORD WINAPI WebViewThread(LPVOID)
 		WS_OVERLAPPEDWINDOW ^ WS_MAXIMIZEBOX ^ WS_MINIMIZEBOX,
 		CW_USEDEFAULT, CW_USEDEFAULT,
 		900, 900,
-		nullptr, NULL, hInstance, NULL);
+		nullptr, NULL, wcex.hInstance, NULL);
 
 	ShowWindow(hWnd, SW_SHOWDEFAULT);
 	UpdateWindow(hWnd);
@@ -188,8 +329,6 @@ DWORD WINAPI WebViewThread(LPVOID)
 #ifdef _DEBUG
 	envOptions->put_AdditionalBrowserArguments(L"--enable-logging --v=1");
 #endif
-
-	wstring loginUrl = L"https://accounts.dmm.com/service/login/password/=/";
 
 	PWSTR path;
 	SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0, NULL, &path);
@@ -242,106 +381,69 @@ DWORD WINAPI WebViewThread(LPVOID)
 								args->get_Uri(&uri);
 								wstring source(uri.get());
 
-								if (source == L"https://www.dmm.com/")
+								if (source.starts_with(L"https://webdgp-gameplayer.games.dmm.com/login/success"))
 								{
 									args->put_Cancel(true);
+
+									wstringstream pathStream(source);
+									wstring segment;
+									vector<wstring> splited;
+									while (getline(pathStream, segment, L'='))
+									{
+										splited.emplace_back(segment);
+									}
 
 									ICoreWebView2_2* webView2;
 									webview->QueryInterface<ICoreWebView2_2>(&webView2);
 
-									ICoreWebView2CookieManager* cookieManager;
-									webView2->get_CookieManager(&cookieManager);
+									auto actAuth = GetAccessToken(splited.back());
 
-									cookieManager->GetCookies(L"https://accounts.dmm.com", Callback<ICoreWebView2GetCookiesCompletedHandler>(
-										[hWnd](
-											HRESULT result,
-											ICoreWebView2CookieList* cookieList)
+									auto gameArgs = GetGameArgs(u8_wide(actAuth));
+
+									if (!gameArgs.empty())
+									{
+										stringstream gameArgsStream(gameArgs);
+										string segment;
+										vector<string> split;
+										while (getline(gameArgsStream, segment, ' '))
 										{
-											UINT count;
-											cookieList->get_Count(&count);
+											split.emplace_back(segment);
+										}
 
+										stringstream singleArgStream1(split[0]);
+										vector<string> split1;
+										while (getline(singleArgStream1, segment, '='))
+										{
+											split1.emplace_back(segment);
+										}
 
-											wstring sessionId;
-											wstring secureId;
+										Gallop::TitleViewController::viewerId = string(split1.back());
 
+										split1.clear();
 
-											for (int i = 0; i < count; i++)
-											{
-												ICoreWebView2Cookie* cookie;
-												cookieList->GetValueAtIndex(i, &cookie);
+										stringstream singleArgStream2(split[1]);
+										while (getline(singleArgStream2, segment, '='))
+										{
+											split1.emplace_back(segment);
+										}
 
-												LPWSTR name;
-												cookie->get_Name(&name);
+										Gallop::TitleViewController::onetimeToken = string(split1.back());
 
-												LPWSTR value;
+										auto t = il2cpp_thread_attach(il2cpp_domain_get());
 
-												if (name == L"login_session_id"s)
-												{
-													cookie->get_Value(&value);
-													sessionId = value;
-												}
+										il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*)>("umamusume.dll", "Gallop", "Certification", "set_dmmViewerId", 1)(il2cpp_string_new(Gallop::TitleViewController::viewerId.data()));
+										il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*)>("umamusume.dll", "Gallop", "Certification", "set_dmmOnetimeToken", 1)(il2cpp_string_new(Gallop::TitleViewController::onetimeToken.data()));
 
-												if (name == L"login_secure_id"s)
-												{
-													cookie->get_Value(&value);
-													secureId = value;
-												}
+										isLoginWebViewOpen = false;
 
-												if (!sessionId.empty() && !secureId.empty())
-												{
-													break;
-												}
-											}
+										auto viewController = GetCurrentViewController();
+										il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*)>(viewController->klass, "OnClickPushStart", 0)->methodPointer(viewController);
 
-											auto gameArgs = GetGameArgs(sessionId, secureId);
+										il2cpp_thread_detach(t);
+									}
 
-											if (!gameArgs.empty())
-											{
-												stringstream gameArgsStream(gameArgs);
-												string segment;
-												vector<string> split;
-												while (getline(gameArgsStream, segment, ' '))
-												{
-													split.emplace_back(segment);
-												}
-
-												stringstream singleArgStream1(split[0]);
-												vector<string> split1;
-												while (getline(singleArgStream1, segment, '='))
-												{
-													split1.emplace_back(segment);
-												}
-
-												Gallop::TitleViewController::viewerId = string(split1.back());
-
-												split1.clear();
-
-												stringstream singleArgStream2(split[1]);
-												while (getline(singleArgStream2, segment, '='))
-												{
-													split1.emplace_back(segment);
-												}
-
-												Gallop::TitleViewController::onetimeToken = string(split1.back());
-
-												auto t = il2cpp_thread_attach(il2cpp_domain_get());
-
-												il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*)>("umamusume.dll", "Gallop", "Certification", "set_dmmViewerId", 1)(il2cpp_string_new(Gallop::TitleViewController::viewerId.data()));
-												il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*)>("umamusume.dll", "Gallop", "Certification", "set_dmmOnetimeToken", 1)(il2cpp_string_new(Gallop::TitleViewController::onetimeToken.data()));
-
-												isLoginWebViewOpen = false;
-
-												auto viewController = GetCurrentViewController();
-												il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*)>(viewController->klass, "OnClickPushStart", 0)->methodPointer(viewController);
-
-												il2cpp_thread_detach(t);
-											}
-
-											webviewController->Close();
-											PostMessageW(hWnd, WM_CLOSE, NULL, NULL);
-
-											return S_OK;
-										}).Get());
+									webviewController->Close();
+									PostMessageW(hWnd, WM_CLOSE, NULL, NULL);
 								}
 
 								if (source.substr(0, 5) != L"https")
@@ -423,31 +525,23 @@ static void TitleViewController_OnClickPushStart_hook(Il2CppObject* self)
 			}
 			else
 			{
-				auto dialogData = il2cpp_object_new(
-					il2cpp_symbols::get_class("umamusume.dll", "Gallop", "DialogCommon/Data"));
-				il2cpp_runtime_object_init(dialogData);
+				auto dialogData = Gallop::DialogCommon::Data();
+				dialogData.SetSimpleOneButtonMessage(
+					GetTextIdByName(L"Common0081"),
+					il2cpp_string_new16(
+						(LocalifySettings::GetText("initial_disclaimer_1") + wstring(localizeextension_text(GetTextIdByName(L"Common0150"))->chars) + LocalifySettings::GetText("initial_disclaimer_2")).data()),
+					CreateDelegateStatic(*[](void*, Il2CppObject* dialog)
+						{
+							Gallop::DialogCommon(GetFrontDialog()).Close();
+							il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*, int)>("UnityEngine.CoreModule.dll", "UnityEngine", "PlayerPrefs", "SetInt", 2)(il2cpp_string_new("ReadDisclaimer"), 1);
+							il2cpp_symbols::get_method_pointer<void (*)()>("UnityEngine.CoreModule.dll", "UnityEngine", "PlayerPrefs", "Save", IgnoreNumberOfArguments)();
+						}),
+					GetTextIdByName(L"Common0150")
+				);
 
-				dialogData = reinterpret_cast<Il2CppObject * (*)(Il2CppObject * thisObj,
-					ULONG headerTextId,
-					Il2CppString * message,
-					Il2CppDelegate * onClose,
-					ULONG closeTextId)>(
-						il2cpp_class_get_method_from_name(dialogData->klass, "SetSimpleOneButtonMessage",
-							4)->methodPointer
-						)(dialogData, GetTextIdByName(L"Common0081"), il2cpp_string_new16(
-							(LocalifySettings::GetText("initial_disclaimer_1") + wstring(localizeextension_text(GetTextIdByName(L"Common0150"))->chars) + LocalifySettings::GetText("initial_disclaimer_2")).data()), 
-							CreateDelegateStatic(*[](void*, Il2CppObject* dialog)
-								{
-									il2cpp_symbols::get_method_pointer<void (*)(Il2CppObject*)>("umamusume.dll", "Gallop", "DialogCommon", "Close", 0)(GetFrontDialog());
-									il2cpp_symbols::get_method_pointer<void (*)(Il2CppString*, int)>("UnityEngine.CoreModule.dll", "UnityEngine", "PlayerPrefs", "SetInt", 2)(il2cpp_string_new("ReadDisclaimer"), 1);
-									il2cpp_symbols::get_method_pointer<void (*)()>("UnityEngine.CoreModule.dll", "UnityEngine", "PlayerPrefs", "Save", IgnoreNumberOfArguments)();
-								}), GetTextIdByName(L"Common0150"));
+				dialogData.AutoClose(false);
 
-				auto AutoCloseField = il2cpp_class_get_field_from_name_wrap(dialogData->klass, "AutoClose");
-				bool AutoClose = false;
-
-				il2cpp_field_set_value(dialogData, AutoCloseField, &AutoClose);
-				il2cpp_symbols::get_method_pointer<Il2CppObject* (*)(Il2CppObject* data)>("umamusume.dll", "Gallop", "DialogManager", "PushDialog", 1)(dialogData);
+				Gallop::DialogManager::PushDialog(dialogData);
 			}
 			return;
 		}
@@ -489,16 +583,86 @@ static void TitleViewController_UpdateView_hook(Il2CppObject* self)
 	}
 }
 
+static Il2CppObject* TitleViewController_InitializeView_hook(Il2CppObject* self)
+{
+	auto res = reinterpret_cast<decltype(TitleViewController_InitializeView_hook)*>(TitleViewController_InitializeView_orig)(self);
+
+	if (!Gallop::Screen::IsLandscapeMode())
+	{
+		return res;
+	}
+
+	auto viewBase = il2cpp_class_get_method_from_name_type<Il2CppObject * (*)(Il2CppObject*)>(self->klass, "GetViewBase", 0)->methodPointer(self);
+	auto TitleLogoTransformField = il2cpp_class_get_field_from_name_wrap(viewBase->klass, "TitleLogoTransform");
+	Il2CppObject* TitleLogoTransform;
+	il2cpp_field_get_value(viewBase, TitleLogoTransformField, &TitleLogoTransform);
+
+	auto ProgressRootObjectField = il2cpp_class_get_field_from_name(viewBase->klass, "ProgressRootObject");
+	Il2CppObject* ProgressRootObject;
+	il2cpp_field_get_value(viewBase, ProgressRootObjectField, &ProgressRootObject);
+
+	auto StartTapObiectField = il2cpp_class_get_field_from_name(viewBase->klass, "StartTapObiect");
+	Il2CppObject* StartTapObiect;
+	il2cpp_field_get_value(viewBase, StartTapObiectField, &StartTapObiect);
+
+	auto transform = UnityEngine::RectTransform(TitleLogoTransform);
+	auto sizeDelta = transform.sizeDelta();
+	auto anchoredPosition = transform.anchoredPosition();
+	Gallop::UIManager::Instance().StartCoroutineManaged2(res);
+
+	UnityEngine::GameObject(ProgressRootObject).transform().localScale({ 1.0f, 1.0f, 1.0f });
+	UnityEngine::GameObject(StartTapObiect).transform().localScale({ 1.0f, 1.0f, 1.0f });
+
+	auto SaveDataManager = GetSingletonInstance(il2cpp_symbols::get_class("umamusume.dll", "Gallop", "SaveDataManager"));
+	auto SaveLoader = il2cpp_class_get_method_from_name_type<Il2CppObject * (*)(Il2CppObject*)>(SaveDataManager->klass, "get_SaveLoader", 0)->methodPointer(SaveDataManager);
+	auto CampaignTitleLogoChangeId = il2cpp_class_get_method_from_name_type<CodeStage::AntiCheat::ObscuredTypes::ObscuredInt(*)(Il2CppObject*)>(SaveLoader->klass, "get_CampaignTitleLogoChangeId", 0)->methodPointer(SaveLoader);
+
+	if (CampaignTitleLogoChangeId.GetDecrypted() > 0)
+	{
+		if (Game::CurrentGameRegion == Game::Region::ENG)
+		{
+			transform.sizeDelta(Vector2{ 1200.0f, 600.0f });
+			transform.anchoredPosition(Vector2{ -56.0f, 410.0f });
+		}
+		else
+		{
+			transform.sizeDelta(Vector2{ 744.0f, 632.0f });
+			transform.anchoredPosition(Vector2{ -14.0f, 610.0f });
+		}
+	}
+	else
+	{
+		if (Game::CurrentGameRegion == Game::Region::ENG)
+		{
+			transform.sizeDelta(Vector2{ 1440.0f, 360.0f });
+			transform.anchoredPosition(Vector2{ 0.0f, 400.0f });
+		}
+		else
+		{
+			transform.sizeDelta(sizeDelta);
+			transform.anchoredPosition(anchoredPosition);
+		}
+	}
+
+	return il2cpp_symbols::get_method_pointer<Il2CppObject * (*)(Il2CppDelegate*)>("umamusume.dll", "Gallop", "MonoBehaviourExtension", "WaitForEndFrameAsync", 1)(nullptr);
+}
+
 static void InitAddress()
 {
 	TitleViewController_OnClickPushStart_addr = il2cpp_symbols::get_method_pointer("umamusume.dll", "Gallop", "TitleViewController", "OnClickPushStart", 0);
 	TitleViewController_UpdateView_addr = il2cpp_symbols::get_method_pointer("umamusume.dll", "Gallop", "TitleViewController", "UpdateView", 0);
+	TitleViewController_InitializeView_addr = il2cpp_symbols::get_method_pointer("umamusume.dll", "Gallop", "TitleViewController", "InitializeView", 0);
 }
 
 static void HookMethods()
 {
 	ADD_HOOK(TitleViewController_OnClickPushStart, "Gallop.TitleViewController::OnClickPushStart at %p\n");
 	ADD_HOOK(TitleViewController_UpdateView, "Gallop.TitleViewController::UpdateView at %p\n");
+
+	if (config::freeform_window)
+	{
+		ADD_HOOK(TitleViewController_InitializeView, "Gallop.TitleViewController::InitializeView at %p\n");
+	}
 }
 
 STATIC

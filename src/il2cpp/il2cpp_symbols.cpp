@@ -1,17 +1,20 @@
 #include "il2cpp_symbols.hpp"
 
+#define RAPIDJSON_HAS_STDSTRING 1
+
+#include <rapidjson/encodings.h>
+#include <rapidjson/document.h>
+
 #include <winver.h>
+#include <wincrypt.h>
+
+#include "Signature.h"
 
 #define DO_API(r, n, p) r (*n) p
 #include "il2cpp-api-functions_unified.h"
 #undef DO_API
 
 Il2CppDefaults il2cpp_defaults;
-
-//char* il2cpp_array_addr_with_size(void* array, int32_t size, uintptr_t idx)
-//{
-//	return reinterpret_cast<char*>(array) + kIl2CppSizeOfArray + size * idx;
-//}
 
 Il2CppString* il2cpp_string_new16(const wchar_t* value)
 {
@@ -130,6 +133,99 @@ namespace il2cpp_symbols
 
 	std::vector<std::function<void()>> init_callbacks;
 
+	static bool HasValidCert(filesystem::path path)
+	{
+		HCERTSTORE hStore = nullptr;
+		HCRYPTMSG hMsg = nullptr;
+		BOOL fResult;
+		DWORD dwEncoding, dwContentType, dwFormatType;
+		DWORD dwSignerInfo;
+		CERT_INFO CertInfo{};
+
+		fResult = CryptQueryObject(CERT_QUERY_OBJECT_FILE,
+			path.wstring().data(),
+			CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+			CERT_QUERY_FORMAT_FLAG_BINARY,
+			0,
+			&dwEncoding,
+			&dwContentType,
+			&dwFormatType,
+			&hStore,
+			&hMsg,
+			nullptr);
+
+		if (fResult)
+		{
+			// Get signer information size.
+			fResult = CryptMsgGetParam(hMsg,
+				CMSG_SIGNER_INFO_PARAM,
+				0,
+				nullptr,
+				&dwSignerInfo);
+
+			if (fResult)
+			{
+				// Allocate memory for signer information.
+				PCMSG_SIGNER_INFO pSignerInfo = reinterpret_cast<PCMSG_SIGNER_INFO>(LocalAlloc(LPTR, dwSignerInfo));
+				if (pSignerInfo)
+				{
+					// Get Signer Information.
+					fResult = CryptMsgGetParam(hMsg,
+						CMSG_SIGNER_INFO_PARAM,
+						0,
+						(PVOID)pSignerInfo,
+						&dwSignerInfo);
+
+					if (fResult)
+					{
+						// Search for the signer certificate in the temporary
+						// certificate store.
+						CertInfo.Issuer = pSignerInfo->Issuer;
+						CertInfo.SerialNumber = pSignerInfo->SerialNumber;
+
+						PCCERT_CONTEXT pCertContext = CertFindCertificateInStore(hStore,
+							X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+							0,
+							CERT_FIND_SUBJECT_CERT,
+							(PVOID)&CertInfo,
+							nullptr);
+
+						if (pCertContext)
+						{
+							DWORD dwData;
+
+							// Get Subject name size.
+							if (dwData = CertGetNameStringW(pCertContext,
+								CERT_NAME_SIMPLE_DISPLAY_TYPE,
+								0,
+								nullptr,
+								nullptr,
+								0))
+							{
+								// Allocate memory for subject name.
+								wstring subjectName;
+								subjectName.resize(dwData * sizeof(wchar_t));
+
+								// Get subject name.
+								if (CertGetNameStringW(pCertContext,
+									CERT_NAME_SIMPLE_DISPLAY_TYPE,
+									0,
+									nullptr,
+									subjectName.data(),
+									dwData))
+								{
+									return subjectName.starts_with(L"Unity Technologies");
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
 	void load_symbols(filesystem::path& path)
 	{
 		if (!config::fn_map.IsNull())
@@ -148,13 +244,14 @@ namespace il2cpp_symbols
 		PWSTR versionInfo = nullptr;
 
 		VerQueryValueW(versionInfoBuffer.data(), L"\\", reinterpret_cast<void**>(&pVSFileInfo), &versionInfoSize);
-		
+
 		if (!pVSFileInfo)
 		{
 			return;
 		}
-		
+
 		auto major = HIWORD(pVSFileInfo->dwProductVersionMS);
+		auto patch = HIWORD(pVSFileInfo->dwProductVersionLS);
 
 		switch (major)
 		{
@@ -171,24 +268,11 @@ namespace il2cpp_symbols
 			break;
 		}
 
-		int startRva;
-
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity20)
+		if (!HasValidCert(path))
 		{
-			// 2020.3.47f
-			startRva = 0x8984d4;
-		}
-		else if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
-		{
-			// 2022.3.20f
-			startRva = 0x7834A2;
-		}
-		else
-		{
+			// Modified UnityPlayer
 			return;
 		}
-
-		int rva = startRva;
 
 		try
 		{
@@ -204,13 +288,26 @@ namespace il2cpp_symbols
 			MEMORY_BASIC_INFORMATION memInfo;
 			VirtualQuery(view, &memInfo, sizeof(memInfo));
 
+			int startOffset = SigScanOffset("\x48\x83\xC4\x28\xC3\x48\x89\x5C\x24\x00\x48\x8d\x15", "xxxxxxxxx?xxx", memInfo);
+			int nextOffset = SigScanOffset("\x48\x8d\x15", "xxx", memInfo, startOffset);
+
+			int firstGap = nextOffset - startOffset;
+
+			int nextOffset2 = SigScanOffset("\x48\x8d\x15", "xxx", memInfo, nextOffset);
+
+			int gap = nextOffset2 - nextOffset;
+
 			stringstream stream{ string(reinterpret_cast<char*>(view), memInfo.RegionSize) };
 
 			auto base = pe_bliss::pe_base(stream, pe_bliss::pe_properties_64(), false);
 
+			int startRva = base.file_offset_to_rva(startOffset);
+			int rva = startRva;
+
 			vector<const char*> symbol_names;
 
 #define DO_API(r, n, p) symbol_names.emplace_back(#n)
+#define DO_API_NEW(r, n, p) if (patch >= 62) symbol_names.emplace_back(#n)
 			// PROFILER is only used in debug builds
 #undef IL2CPP_ENABLE_PROFILER
 #define IL2CPP_ENABLE_PROFILER 0
@@ -228,6 +325,7 @@ namespace il2cpp_symbols
 #undef IL2CPP_ENABLE_PROFILER
 #define IL2CPP_ENABLE_PROFILER !IL2CPP_TINY
 #undef DO_API
+#undef DO_API_NEW
 
 			for (auto name : symbol_names)
 			{
@@ -261,14 +359,7 @@ namespace il2cpp_symbols
 					rapidjson::StringRef(real_name),
 					config::fn_map.GetAllocator());
 
-				if (Game::CurrentUnityVersion == Game::UnityVersion::Unity20)
-				{
-					rva += rva == startRva ? 0x35 : 0x30;
-				}
-				else
-				{
-					rva += rva == startRva ? 0x28 : 0x26;
-				}
+				rva += rva == startRva ? firstGap : gap;
 			}
 
 			UnmapViewOfFile(view);
@@ -286,7 +377,6 @@ namespace il2cpp_symbols
 	void init(HMODULE game_module)
 	{
 		init_functions(game_module);
-		//il2cpp_domain = il2cpp_domain_get();
 	}
 
 	void call_init_callbacks()
@@ -497,6 +587,19 @@ namespace il2cpp_symbols
 						return method->methodPointer;
 					}
 				}
+			}
+		}
+		return nullptr;
+	}
+
+	Il2CppMethodPointer get_method_pointer(Il2CppClass* klass, const char* name, int argsCount)
+	{
+		if (klass)
+		{
+			auto method = il2cpp_class_get_method_from_name(klass, name, argsCount);
+			if (method)
+			{
+				return method->methodPointer;
 			}
 		}
 		return nullptr;
