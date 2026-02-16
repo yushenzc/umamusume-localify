@@ -117,7 +117,7 @@ extern Il2CppDefaults il2cpp_defaults;
 
 constexpr int IgnoreNumberOfArguments = -1;
 
-Il2CppString* il2cpp_string_new16(const wchar_t* value);
+Il2CppString* il2cpp_string_new16(const Il2CppChar* value);
 
 FieldInfo* il2cpp_class_get_field_from_name_wrap(Il2CppClass* klass, const char* name);
 
@@ -126,6 +126,8 @@ std::string il2cpp_fn_name(const char* name);
 namespace il2cpp_symbols
 {
 	extern Il2CppDomain* il2cpp_domain;
+	
+	extern uint64_t base;
 
 	extern std::vector<std::function<void()>> init_callbacks;
 

@@ -32,7 +32,7 @@ namespace Gallop
 {
 	PushNotificationManager PushNotificationManager::Instance()
 	{
-		auto instanceField = il2cpp_class_get_field_from_name_wrap(il2cpp_symbols::get_class(ASSEMBLY_NAME, "Gallop", "PushNotificationManager"), "_instance");
+		auto instanceField = il2cpp_class_get_field_from_name(il2cpp_symbols::get_class(ASSEMBLY_NAME, "Gallop", "PushNotificationManager"), "_instance");
 		Il2CppObject* instance;
 		il2cpp_field_static_get_value(instanceField, &instance);
 		return PushNotificationManager(instance);
@@ -48,18 +48,18 @@ namespace Gallop
 			iconName.append(to_string(id));
 		}
 
-		auto fileName = wstring(Cryptographer::MakeMd5(il2cpp_string_new(iconName.data()))->chars);
-		fileName.append(L".png");
+		auto fileName = u16string(Cryptographer::MakeMd5(il2cpp_string_new(iconName.data()))->chars);
+		fileName.append(u".png");
 
-		auto path = wstring(UnityEngine::Application::persistentDataPath()->chars);
-		path.append(L"/lpfi");
+		auto path = u16string(UnityEngine::Application::persistentDataPath()->chars);
+		path.append(u"/lpfi");
 
 		if (!filesystem::exists(path))
 		{
 			filesystem::create_directories(path);
 		}
 
-		return il2cpp_string_new16((path + L"/" + fileName).data());
+		return il2cpp_string_new16((path + u"/" + fileName).data());
 	}
 
 	int PushNotificationManager::MakeNotificationId(LocalPushDefine::LocalPushType localPushType, int key)

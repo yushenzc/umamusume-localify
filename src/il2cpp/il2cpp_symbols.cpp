@@ -11,14 +11,14 @@
 #include "Signature.h"
 
 #define DO_API(r, n, p) r (*n) p
-#include "il2cpp-api-functions_unified.h"
+#include "il2cpp-api-functions.h"
 #undef DO_API
 
 Il2CppDefaults il2cpp_defaults;
 
-Il2CppString* il2cpp_string_new16(const wchar_t* value)
+Il2CppString* il2cpp_string_new16(const Il2CppChar* value)
 {
-	return il2cpp_string_new_utf16(value, wcslen(value));
+	return il2cpp_string_new_utf16(value, std::char_traits<Il2CppChar>::length(value));
 }
 
 #include "config/config.hpp"
@@ -38,7 +38,7 @@ FieldInfo* il2cpp_class_get_field_from_name_wrap(Il2CppClass* klass, const char*
 
 	if (config::code_map.HasMember("!common"))
 	{
-		auto commonMap = config::code_map["!common"].GetObjectW();
+		auto commonMap = config::code_map["!common"].GetObj();
 		if (commonMap.HasMember(name))
 		{
 			auto field = il2cpp_class_get_field_from_name(klass, commonMap[name].GetString());
@@ -54,7 +54,7 @@ FieldInfo* il2cpp_class_get_field_from_name_wrap(Il2CppClass* klass, const char*
 		return il2cpp_class_get_field_from_name(klass, name);
 	}
 
-	auto classMap = config::code_map[className.data()].GetObjectW();
+	auto classMap = config::code_map[className.data()].GetObj();
 
 	if (classMap.HasMember(name))
 	{
@@ -83,7 +83,7 @@ FieldInfo* il2cpp_class_get_field_from_name_wrap(Il2CppClass* klass, const char*
 	if (classMap.HasMember("!extends"))
 	{
 		auto parentName = classMap["!extends"].GetString();
-		auto parentMap = config::code_map[parentName].GetObjectW();
+		auto parentMap = config::code_map[parentName].GetObj();
 		auto parentClass = klass->parent;
 
 		if (parentMap.HasMember((name + ".index"s).data()))
@@ -130,6 +130,7 @@ std::string il2cpp_fn_name(const char* name)
 namespace il2cpp_symbols
 {
 	Il2CppDomain* il2cpp_domain = nullptr;
+	uint64_t base = 0;
 
 	std::vector<std::function<void()>> init_callbacks;
 
@@ -255,12 +256,6 @@ namespace il2cpp_symbols
 
 		switch (major)
 		{
-		case 2019:
-			Game::CurrentUnityVersion = Game::UnityVersion::Unity19;
-			break;
-		case 2020:
-			Game::CurrentUnityVersion = Game::UnityVersion::Unity20;
-			break;
 		case 2022:
 			Game::CurrentUnityVersion = Game::UnityVersion::Unity22;
 			break;
@@ -313,14 +308,7 @@ namespace il2cpp_symbols
 #define IL2CPP_ENABLE_PROFILER 0
 			// DO_API_NO_RETURN is not obfuscated
 #define DO_API_NO_RETURN(r, n, p) symbol_names.emplace_back("_"#n)
-			if (Game::CurrentUnityVersion == Game::UnityVersion::Unity20)
-			{
-#include "il2cpp-api-functions_2020.h"
-			}
-			else
-			{
 #include "il2cpp-api-functions.h"
-			}
 #undef DO_API_NO_RETURN
 #undef IL2CPP_ENABLE_PROFILER
 #define IL2CPP_ENABLE_PROFILER !IL2CPP_TINY
@@ -390,15 +378,16 @@ namespace il2cpp_symbols
 	void init_functions(HMODULE game_module)
 	{
 #define DO_API(r, n, p) n = reinterpret_cast<decltype(n)>(GetProcAddress(game_module, il2cpp_fn_name(#n).data()))
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity20)
-		{
-#include "il2cpp-api-functions_2020.h"
-		}
-		else
-		{
 #include "il2cpp-api-functions.h"
-		}
 #undef DO_API
+
+		HMODULE hMod = nullptr;
+		if (GetModuleHandleExW(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCTSTR>(il2cpp_domain_get_assemblies), &hMod))
+		{
+			base = reinterpret_cast<uint64_t>(hMod);
+		}
 	}
 
 	void init_defaults()
@@ -505,14 +494,7 @@ namespace il2cpp_symbols
 			Il2CppArgumentException);
 		DEFAULTS_INIT_TYPE(marshalbyrefobject_class, "System", "MarshalByRefObject",
 			Il2CppMarshalByRefObject);
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
-		{
-			DEFAULTS_GEN_INIT_TYPE(il2cpp_com_object_class, "System", "__Il2CppComObject", Il2CppComObject);
-		}
-		else
-		{
-			DEFAULTS_INIT_TYPE(il2cpp_com_object_class, "System", "__Il2CppComObject", Il2CppComObject);
-		}
+		DEFAULTS_GEN_INIT_TYPE(il2cpp_com_object_class, "System", "__Il2CppComObject", Il2CppComObject);
 		DEFAULTS_INIT_TYPE(safe_handle_class, "System.Runtime.InteropServices", "SafeHandle",
 			Il2CppSafeHandle);
 		DEFAULTS_INIT_TYPE(sort_key_class, "System.Globalization", "SortKey", Il2CppSortKey);
@@ -548,11 +530,8 @@ namespace il2cpp_symbols
 		DEFAULTS_INIT_OPTIONAL(uint32_shared_enum, "System", "UInt32Enum");
 		DEFAULTS_INIT_OPTIONAL(uint64_shared_enum, "System", "UInt64Enum");
 
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
-		{
-			DEFAULTS_GEN_INIT_OPTIONAL(il2cpp_fully_shared_type, "Unity.IL2CPP.Metadata", "__Il2CppFullySharedGenericType");
-			DEFAULTS_GEN_INIT_OPTIONAL(il2cpp_fully_shared_struct_type, "Unity.IL2CPP.Metadata", "__Il2CppFullySharedGenericStructType");
-		}
+		DEFAULTS_GEN_INIT_OPTIONAL(il2cpp_fully_shared_type, "Unity.IL2CPP.Metadata", "__Il2CppFullySharedGenericType");
+		DEFAULTS_GEN_INIT_OPTIONAL(il2cpp_fully_shared_struct_type, "Unity.IL2CPP.Metadata", "__Il2CppFullySharedGenericStructType");
 	}
 
 	Il2CppClass* get_class(const char* assemblyName, const char* namespaze, const char* klassName)

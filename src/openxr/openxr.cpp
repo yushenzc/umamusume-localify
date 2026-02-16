@@ -348,7 +348,7 @@ namespace Unity
 		}
 
 		auto productName = UnityEngine::Application::productName()->chars;
-		SetDllDirectoryW((productName + L"_Data\\Plugins\\x86_64\\"s).data());
+		SetDllDirectoryW(u16_wide(productName + u"_Data\\Plugins\\x86_64\\"s).data());
 		module = LoadLibraryW(L"UnityOpenXR.dll");
 		SetDllDirectoryW(nullptr);
 
@@ -397,7 +397,7 @@ namespace Unity
 
 		//UnityEngine::XR::InputTracking::GetNodeStates_Internal(nodeStates);
 
-		//FieldInfo* itemsField = il2cpp_class_get_field_from_name_wrap(nodeStates->klass, "_items");
+		//FieldInfo* itemsField = il2cpp_class_get_field_from_name(nodeStates->klass, "_items");
 		//Il2CppArraySize_t<UnityEngine::XR::XRNodeState>* array;
 		//il2cpp_field_get_value(nodeStates, itemsField, &array);
 
@@ -427,8 +427,6 @@ namespace Unity
 			return;
 		}
 
-		Internal_SetSuccessfullyInitialized(false);
-
 		if (!Internal_LoadOpenXRLibrary(L"openxr_loader"))
 		{
 			cout << "Fail Internal_LoadOpenXRLibrary" << endl;
@@ -443,13 +441,13 @@ namespace Unity
 			return;
 		}
 
-		auto productName = wide_u8(il2cpp_resolve_icall_type<Il2CppString * (*)()>("UnityEngine.Application::get_productName")()->chars);
+		auto productName = u16_u8(il2cpp_resolve_icall_type<Il2CppString * (*)()>("UnityEngine.Application::get_productName")()->chars);
 
-		auto version = wide_u8(il2cpp_symbols::get_method_pointer<Il2CppString * (*)()>(
+		auto version = u16_u8(il2cpp_symbols::get_method_pointer<Il2CppString * (*)()>(
 			"UnityEngine.CoreModule.dll", "UnityEngine",
 			"Application", "get_version", IgnoreNumberOfArguments)()->chars);
 
-		auto unityVersion = wide_u8(il2cpp_symbols::get_method_pointer<Il2CppString * (*)()>(
+		auto unityVersion = u16_u8(il2cpp_symbols::get_method_pointer<Il2CppString * (*)()>(
 			"UnityEngine.CoreModule.dll", "UnityEngine",
 			"Application", "get_unityVersion", IgnoreNumberOfArguments)()->chars);
 
@@ -517,14 +515,14 @@ namespace Unity
 
 					auto subsystem = il2cpp_symbols::get_method_pointer<Il2CppObject * (*)(void*)>("UnityEngine.SubsystemsModule.dll", "UnityEngine", "SubsystemManager", "GetIntegratedSubsystemByPtr", 1)(ptr);
 
-					wcout << id->chars << endl;
+					wcout << u16_wide(id->chars) << endl;
 
-					if (wstring(id->chars).find(L"Display") != wstring::npos)
+					if (u16string(id->chars).find(u"Display") != u16string::npos)
 					{
 						xrDisplaySubsystem = subsystem;
 					}
 
-					if (wstring(id->chars).find(L"Input") != wstring::npos)
+					if (u16string(id->chars).find(u"Input") != u16string::npos)
 					{
 						xrInputSubsystem = subsystem;
 					}
@@ -648,17 +646,7 @@ namespace Unity
 
 	bool OpenXR::Internal_LoadOpenXRLibrary(const wchar_t* loaderPath)
 	{
-		if (!module)
-		{
-			return false;
-		}
-
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
-		{
-			return reinterpret_cast<bool (*)(const char* loaderPath)>(GetProcAddress(module, "main_LoadOpenXRLibrary"))(wide_u8(loaderPath).data());
-		}
-
-		return reinterpret_cast<decltype(Internal_LoadOpenXRLibrary)*>(GetProcAddress(module, "main_LoadOpenXRLibrary"))(loaderPath);
+		return reinterpret_cast<bool (*)(const char* loaderPath)>(GetProcAddress(module, "main_LoadOpenXRLibrary"))(wide_u8(loaderPath).data());
 	}
 
 	void OpenXR::Internal_UnloadOpenXRLibrary()
@@ -688,28 +676,22 @@ namespace Unity
 			return;
 		}
 
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
+		auto engineVersionString = string(engineVersion);
+
+		auto MD5 = il2cpp_symbols::get_method_pointer<Il2CppObject * (*)()>("mscorlib.dll", "System.Security.Cryptography", "MD5", "Create", IgnoreNumberOfArguments)();
+
+		auto versionByteArray = il2cpp_array_new_type<int8_t>(il2cpp_symbols::get_class("mscorlib.dll", "System", "Byte"), engineVersionString.size());
+
+		for (int i = 0; i < engineVersionString.size(); i++)
 		{
-			auto engineVersionString = string(engineVersion);
-
-			auto MD5 = il2cpp_symbols::get_method_pointer<Il2CppObject * (*)()>("mscorlib.dll", "System.Security.Cryptography", "MD5", "Create", IgnoreNumberOfArguments)();
-
-			auto versionByteArray = il2cpp_array_new_type<int8_t>(il2cpp_symbols::get_class("mscorlib.dll", "System", "Byte"), engineVersionString.size());
-
-			for (int i = 0; i < engineVersionString.size(); i++)
-			{
-				auto c = engineVersionString.at(i);
-				il2cpp_array_setref(versionByteArray, i, &c);
-			}
-
-			auto versionMD5Data = il2cpp_class_get_method_from_name_type<Il2CppArraySize_t<int8_t>*(*)(Il2CppObject*, Il2CppArraySize_t<int8_t>*, int, int)>(MD5->klass, "ComputeHash", 3)->methodPointer(MD5, versionByteArray, 0, versionByteArray->max_length);
-
-			auto versionHash = il2cpp_symbols::get_method_pointer<uint32_t(*)(Il2CppArraySize_t<int8_t>*, int)>("mscorlib.dll", "System", "BitConverter", "ToUInt32", 2)(versionMD5Data, 0);
-			reinterpret_cast<void (*)(const char* applicationName, UINT applicationVersionHash, UINT engineVersionHash)>(GetProcAddress(module, "NativeConfig_SetApplicationInfo"))(applicationName, applicationVersionHash, versionHash);
-			return;
+			auto c = engineVersionString.at(i);
+			il2cpp_array_setref(versionByteArray, i, &c);
 		}
 
-		reinterpret_cast<decltype(Internal_SetApplicationInfo)*>(GetProcAddress(module, "NativeConfig_SetApplicationInfo"))(applicationName, applicationVersion, applicationVersionHash, engineVersion);
+		auto versionMD5Data = il2cpp_class_get_method_from_name_type<Il2CppArraySize_t<int8_t>*(*)(Il2CppObject*, Il2CppArraySize_t<int8_t>*, int, int)>(MD5->klass, "ComputeHash", 3)->methodPointer(MD5, versionByteArray, 0, versionByteArray->max_length);
+
+		auto versionHash = il2cpp_symbols::get_method_pointer<uint32_t(*)(Il2CppArraySize_t<int8_t>*, int)>("mscorlib.dll", "System", "BitConverter", "ToUInt32", 2)(versionMD5Data, 0);
+		reinterpret_cast<void (*)(const char* applicationName, UINT applicationVersionHash, UINT engineVersionHash)>(GetProcAddress(module, "NativeConfig_SetApplicationInfo"))(applicationName, applicationVersionHash, versionHash);
 	}
 
 	bool OpenXR::Internal_InitializeSession()
@@ -770,21 +752,6 @@ namespace Unity
 		}
 
 		reinterpret_cast<decltype(Internal_PumpMessageLoop)*>(GetProcAddress(module, "messagepump_PumpMessageLoop"))();
-	}
-
-	void OpenXR::Internal_SetSuccessfullyInitialized(bool value)
-	{
-		if (!module)
-		{
-			return;
-		}
-
-		if (Game::CurrentUnityVersion == Game::UnityVersion::Unity22)
-		{
-			return;
-		}
-
-		reinterpret_cast<decltype(Internal_SetSuccessfullyInitialized)*>(GetProcAddress(module, "session_SetSuccessfullyInitialized"))(value);
 	}
 
 	bool OpenXR::Internal_RequestEnableExtensionString(const char* extensionString)

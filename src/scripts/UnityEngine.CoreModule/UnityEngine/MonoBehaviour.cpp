@@ -13,8 +13,11 @@
 #include "scripts/umamusume/Gallop/StandaloneWindowResize.hpp"
 #include "scripts/umamusume/Gallop/DialogCommon.hpp"
 #include "scripts/umamusume/Gallop/DialogManager.hpp"
+#include "scripts/umamusume/Gallop/TextFontManager.hpp"
 
 #include "config/config.hpp"
+
+#include "string_utils.hpp"
 
 namespace
 {
@@ -33,7 +36,7 @@ namespace
 static void LoadAssets()
 {
 	auto dialogCommon = il2cpp_symbols::get_method_pointer<Il2CppObject * (*)()>("umamusume.dll", "Gallop", "DialogManager", "GetForeFrontDialog", IgnoreNumberOfArguments)();
-	auto _currentDialogObjField = il2cpp_class_get_field_from_name_wrap(dialogCommon->klass, "_currentDialogObj");
+	auto _currentDialogObjField = il2cpp_class_get_field_from_name(dialogCommon->klass, "_currentDialogObj");
 	Il2CppObject* _currentDialogObj;
 	il2cpp_field_get_value(dialogCommon, _currentDialogObjField, &_currentDialogObj);
 
@@ -41,18 +44,17 @@ static void LoadAssets()
 #pragma region LOAD_ASSETBUNDLE
 	if (!config::runtime::fontAssets && !config::font_assetbundle_path.empty() && config::replace_to_custom_font && !font_asset_loaded)
 	{
-		wstring assetbundlePath = config::font_assetbundle_path;
-		if (PathIsRelativeW(assetbundlePath.data()))
+		u16string assetbundlePath = config::font_assetbundle_path;
+		if (filesystem::path(assetbundlePath.data()).is_relative())
 		{
-			assetbundlePath.insert(0, filesystem::current_path().wstring().append(L"/"));
+			assetbundlePath.insert(0, filesystem::current_path().u16string().append(u"/"));
 		}
-
 
 		if (filesystem::exists(assetbundlePath))
 		{
-			wstringstream ss;
-			ss << L"Loading font asset: " << assetbundlePath << L"... ";
-			wcout << ss.str();
+			u16stringstream ss;
+			ss << u"Loading font asset: " << assetbundlePath << u"... ";
+			wcout << u16_wide(ss.str());
 			il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*, Il2CppString*)>(text->klass, "set_text", 1)->methodPointer(text, il2cpp_string_new16(ss.str().data()));
 
 			std::thread([text, assetbundlePath]()
@@ -60,7 +62,7 @@ static void LoadAssets()
 					Sleep(100);
 
 					auto t = il2cpp_thread_attach(il2cpp_domain_get());
-					config::runtime::fontAssets = UnityEngine::AssetBundle::LoadFromFile(il2cpp_string_new_utf16(assetbundlePath.data(), assetbundlePath.length()));
+					config::runtime::fontAssets = Gallop::TextFontManager::GetReplacementFontAssetBundle(assetbundlePath);
 					il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*)>(text->klass, "FontTextureChanged", 0)->methodPointer(text);
 
 					if (!config::runtime::fontAssets)
@@ -95,17 +97,17 @@ static void LoadAssets()
 
 	if (!config::replace_assetbundle_file_path.empty() && !replace_assetbundle_file_path_loaded)
 	{
-		wstring assetbundlePath = config::replace_assetbundle_file_path;
-		if (PathIsRelativeW(assetbundlePath.data()))
+		u16string assetbundlePath = config::replace_assetbundle_file_path;
+		if (filesystem::path(assetbundlePath.data()).is_relative())
 		{
-			assetbundlePath.insert(0, filesystem::current_path().wstring().append(L"/"));
+			assetbundlePath.insert(0, filesystem::current_path().u16string().append(u"/"));
 		}
 
 		if (filesystem::exists(assetbundlePath))
 		{
-			wstringstream ss;
-			ss << L"Loading replacement AssetBundle: " << assetbundlePath << L"... ";
-			wcout << ss.str();
+			u16stringstream ss;
+			ss << u"Loading replacement AssetBundle: " << assetbundlePath << u"... ";
+			wcout << u16_wide(ss.str());
 			il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*, Il2CppString*)>(text->klass, "set_text", 1)->methodPointer(text, il2cpp_string_new16(ss.str().data()));
 
 			std::thread([text, assetbundlePath]()
@@ -148,17 +150,17 @@ static void LoadAssets()
 
 	if (!config::replace_atlas_assetbundle_file_path.empty() && !replace_atlas_assetbundle_file_path_loaded)
 	{
-		wstring assetbundlePath = config::replace_atlas_assetbundle_file_path;
-		if (PathIsRelativeW(assetbundlePath.data()))
+		u16string assetbundlePath = config::replace_atlas_assetbundle_file_path;
+		if (filesystem::path(assetbundlePath.data()).is_relative())
 		{
-			assetbundlePath.insert(0, filesystem::current_path().wstring().append(L"/"));
+			assetbundlePath.insert(0, filesystem::current_path().u16string().append(u"/"));
 		}
 
 		if (filesystem::exists(assetbundlePath))
 		{
-			wstringstream ss;
-			ss << L"Loading replacement atlas AssetBundle: " << assetbundlePath << L"... ";
-			wcout << ss.str();
+			u16stringstream ss;
+			ss << u"Loading replacement atlas AssetBundle: " << assetbundlePath << u"... ";
+			wcout << u16_wide(ss.str());
 			il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*, Il2CppString*)>(text->klass, "set_text", 1)->methodPointer(text, il2cpp_string_new16(ss.str().data()));
 
 			std::thread([text, assetbundlePath]()
@@ -204,17 +206,17 @@ static void LoadAssets()
 		static auto it = config::replace_assetbundle_file_paths.begin();
 		if (it != config::replace_assetbundle_file_paths.end())
 		{
-			wstring assetbundlePath = *it;
-			if (PathIsRelativeW(assetbundlePath.data()))
+			u16string assetbundlePath = *it;
+			if (filesystem::path(assetbundlePath.data()).is_relative())
 			{
-				assetbundlePath.insert(0, filesystem::current_path().wstring().append(L"/"));
+				assetbundlePath.insert(0, filesystem::current_path().u16string().append(u"/"));
 			}
 
 			if (filesystem::exists(assetbundlePath))
 			{
-				wstringstream ss;
-				ss << L"Loading replacement AssetBundle: " << assetbundlePath << L"... ";
-				wcout << ss.str();
+				u16stringstream ss;
+				ss << u"Loading replacement AssetBundle: " << assetbundlePath << u"... ";
+				wcout << u16_wide(ss.str());
 				il2cpp_class_get_method_from_name_type<void (*)(Il2CppObject*, Il2CppString*)>(text->klass, "set_text", 1)->methodPointer(text, il2cpp_string_new16(ss.str().data()));
 
 				std::thread([text, assetbundlePath]()
@@ -277,7 +279,7 @@ static Il2CppObject* StartCoroutineManaged2_hook(Il2CppObject* self, Il2CppObjec
 	if (!BootSystem && string(enumerator->klass->name).find("BootCoroutine") != string::npos)
 	{
 		BootSystem = self;
-		auto _bgCanvasObjectField = il2cpp_class_get_field_from_name_wrap(self->klass, "_bgCanvasObject");
+		auto _bgCanvasObjectField = il2cpp_class_get_field_from_name(self->klass, "_bgCanvasObject");
 		Il2CppObject* _bgCanvasObject;
 		il2cpp_field_get_value(self, _bgCanvasObjectField, &_bgCanvasObject);
 
@@ -321,8 +323,8 @@ static Il2CppObject* StartCoroutineManaged2_hook(Il2CppObject* self, Il2CppObjec
 						if (!config::runtime::allowStart)
 						{
 							dialogData.SetSimpleNoButtonMessage(
-								text(GetEnumValue(ParseEnum(GetRuntimeType("umamusume.dll", "Gallop", "TextId"), L"Common0071"))),
-								text(GetEnumValue(ParseEnum(GetRuntimeType("umamusume.dll", "Gallop", "TextId"), L"Error0032")))
+								text(GetEnumValue(ParseEnum(GetRuntimeType("umamusume.dll", "Gallop", "TextId"), u"Common0071"))),
+								text(GetEnumValue(ParseEnum(GetRuntimeType("umamusume.dll", "Gallop", "TextId"), u"Error0032")))
 							);
 
 							Gallop::DialogManager::PushSystemDialog(dialogData, true);
